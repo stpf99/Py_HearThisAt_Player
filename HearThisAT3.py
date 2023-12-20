@@ -49,7 +49,7 @@ class HearThisPlayer(QMainWindow):
 
         self.search_input = QLineEdit(self)
         self.search_input.setPlaceholderText("Search Artist")
-        self.search_button = QPushButton("Search", self)
+        self.search_button = QPushButton("Search Artist", self)
         self.search_button.clicked.connect(self.search_artist)
 
         self.playlist = QListWidget(self)
@@ -108,9 +108,10 @@ class HearThisPlayer(QMainWindow):
         self.genre_selector.genre_selected.connect(self.load_tracks_by_genre)
 
 
-        self.load_artist_tracks_button = QPushButton("Load Artist Likes", self)
-        self.load_artist_tracks_button.clicked.connect(lambda: self.load_artist_tracks(track_type='likes', page=1, count=5))
-
+        self.load_artist_tracks_button = QPushButton("Load Artist Tracks", self)
+        self.load_artist_tracks_button.clicked.connect(lambda: self.load_artist_tracks(track_type='tracks', page=1, count=20))
+        self.load_artist_likes_button = QPushButton("Load Artist Likes", self)
+        self.load_artist_likes_button.clicked.connect(lambda: self.load_artist_tracks(track_type='likes', page=1, count=20))
 
         self.page = 1
 
@@ -140,7 +141,9 @@ class HearThisPlayer(QMainWindow):
         load_artist_tracks_layout = QVBoxLayout()
         load_artist_tracks_layout = QHBoxLayout()
         load_artist_tracks_layout.addWidget(self.load_artist_tracks_button)
-
+        load_artist_likes_layout = QVBoxLayout()
+        load_artist_likes_layout = QHBoxLayout()
+        load_artist_likes_layout.addWidget(self.load_artist_likes_button)
 
 
 
@@ -176,7 +179,7 @@ class HearThisPlayer(QMainWindow):
         layout.addLayout(genre_layout)
         layout.addLayout(info_layout)
         layout.addLayout(load_artist_tracks_layout)
-
+        layout.addLayout(load_artist_likes_layout)
         self.load_genres()
 
     def search_artist(self):
