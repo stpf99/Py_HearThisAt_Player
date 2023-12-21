@@ -51,6 +51,8 @@ class HearThisPlayer(QMainWindow):
         self.search_input.setPlaceholderText("Search Artist")
         self.search_button = QPushButton("Search Artist", self)
         self.search_button.clicked.connect(self.search_artist)
+        self.search_on_button = QPushButton("Search On", self)
+        self.search_on_button.clicked.connect(self.search_on_hearthis)
 
         self.playlist = QListWidget(self)
         self.playlist.currentItemChanged.connect(self.play_track)
@@ -136,6 +138,10 @@ class HearThisPlayer(QMainWindow):
         search_layout.addWidget(self.search_input)
         search_layout.addWidget(self.search_button)
 
+        search_on_layout = QHBoxLayout()
+        search_on_layout.addWidget(self.search_input)
+        search_on_layout.addWidget(self.search_button)
+        search_on_layout.addWidget(self.search_on_button)
 
         load_buttons_layout = QHBoxLayout()
         load_buttons_layout.addWidget(self.load_artist_tracks_button)
@@ -168,6 +174,7 @@ class HearThisPlayer(QMainWindow):
         info_layout.addWidget(self.artist_info_label)
 
         layout.addLayout(search_layout)
+        layout.addLayout(search_on_layout)
         layout.addWidget(self.tab_widget)
         layout.addLayout(control_layout)
         layout.addLayout(page_layout)
@@ -178,6 +185,46 @@ class HearThisPlayer(QMainWindow):
         layout.addLayout(load_buttons_layout)
         
         self.load_genres()
+
+
+    def search_on_hearthis(self):
+        search_query = self.search_input.text().strip()
+        if search_query:
+            search_url = f"https://api-v2.hearthis.at/search"
+            params = {
+                "t": search_query,
+                "page": 1,
+                "count": 5,
+            }
+
+            try:
+                response = requests.get(search_url, params=params)
+                response.raise_for_status()
+                search_results = response.json()
+
+                # Extract information and update the playlist
+                tracks = []
+                for track in search_results:
+                    title = track["title"]
+                    uri = track["uri"]
+                    stream_url = track["stream_url"]
+                    duration = track["duration"]
+
+                    track_data = {
+                        "title": title,
+                        "uri": uri,
+                        "stream_url": stream_url,
+                        "duration": duration,
+                        # ... (add other necessary information)
+                    }
+
+                    tracks.append(track_data)
+
+                self.update_playlist(tracks)
+
+            except requests.RequestException as e:
+                print(f"Error performing search on hearthis.at: {e}")
+
 
 
     def create_load_button(self, text, track_type):
