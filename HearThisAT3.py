@@ -107,13 +107,10 @@ class HearThisPlayer(QMainWindow):
         self.genre_selector = GenreSelector()
         self.genre_selector.genre_selected.connect(self.load_tracks_by_genre)
 
+        self.load_artist_tracks_button = self.create_load_button("Load Artist Tracks", track_type='tracks')
+        self.load_artist_likes_button = self.create_load_button("Load Artist Likes", track_type='likes')
+        self.load_artist_reshares_button = self.create_load_button("Load Artist Reshares", track_type='reshares')
 
-        self.load_artist_tracks_button = QPushButton("Load Artist Tracks", self)
-        self.load_artist_tracks_button.clicked.connect(lambda: self.load_artist_tracks(track_type='tracks', page=1, count=20))
-        self.load_artist_likes_button = QPushButton("Load Artist Likes", self)
-        self.load_artist_likes_button.clicked.connect(lambda: self.load_artist_tracks(track_type='likes', page=1, count=20))
-        self.load_artist_reshares_button = QPushButton("Load Artist Reshares", self)
-        self.load_artist_reshares_button.clicked.connect(lambda: self.load_artist_tracks(track_type='reshares', page=1, count=20))
 
         self.page = 1
 
@@ -140,18 +137,13 @@ class HearThisPlayer(QMainWindow):
         search_layout.addWidget(self.search_button)
 
 
-        load_artist_tracks_layout = QVBoxLayout()
-        load_artist_tracks_layout = QHBoxLayout()
-        load_artist_tracks_layout.addWidget(self.load_artist_tracks_button)
-        load_artist_likes_layout = QVBoxLayout()
-        load_artist_likes_layout = QHBoxLayout()
-        load_artist_likes_layout.addWidget(self.load_artist_likes_button)
-        load_artist_reshares_layout = QVBoxLayout()
-        load_artist_reshares_layout = QHBoxLayout()
-        load_artist_reshares_layout.addWidget(self.load_artist_reshares_button)
+        load_buttons_layout = QHBoxLayout()
+        load_buttons_layout.addWidget(self.load_artist_tracks_button)
+        load_buttons_layout.addWidget(self.load_artist_likes_button)
+        load_buttons_layout.addWidget(self.load_artist_reshares_button)
 
 
-        control_layout = QVBoxLayout()
+        control_layout = QHBoxLayout()
         control_layout.addWidget(self.play_button)
         control_layout.addWidget(self.stop_button)
         control_layout.addWidget(self.add_to_selected_button)
@@ -165,11 +157,12 @@ class HearThisPlayer(QMainWindow):
         slider_layout = QHBoxLayout()
         slider_layout.addWidget(self.slider)
 
-        genre_layout = QVBoxLayout()
+        genre_layout = QHBoxLayout()
         genre_layout.addWidget(self.genre_selector)
         genre_layout.addWidget(self.load_genre_button)
         genre_layout.addWidget(self.prev_page_button)
         genre_layout.addWidget(self.next_page_button)
+
 
         info_layout = QVBoxLayout()
         info_layout.addWidget(self.artist_info_label)
@@ -182,10 +175,15 @@ class HearThisPlayer(QMainWindow):
         layout.addLayout(slider_layout)
         layout.addLayout(genre_layout)
         layout.addLayout(info_layout)
-        layout.addLayout(load_artist_tracks_layout)
-        layout.addLayout(load_artist_likes_layout)
-        layout.addLayout(load_artist_reshares_layout)
+        layout.addLayout(load_buttons_layout)
+        
         self.load_genres()
+
+
+    def create_load_button(self, text, track_type):
+        button = QPushButton(text, self)
+        button.clicked.connect(lambda: self.load_artist_tracks(track_type=track_type, page=1, count=20))
+        return button
 
     def search_artist(self):
         artist_username = self.search_input.text().strip()
