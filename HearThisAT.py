@@ -1,14 +1,66 @@
 import sys
 import requests
-from qtpy.QtCore import Qt, QUrl, Signal, QTimer, QTime
+import json
+import time
+from pathlib import Path
+from qtpy.QtCore import Qt, QUrl, Signal, QTimer, QTime, QThread
 from qtpy.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QListWidget, QListWidgetItem, QLineEdit, QLabel, QPushButton,
-    QSlider, QComboBox, QTextBrowser, QTabWidget, QToolBar, QAction
+    QSlider, QComboBox, QTextBrowser, QTabWidget, QToolBar, QAction,
+    QProgressBar
 )
 from qtpy.QtMultimedia import QMediaPlayer, QMediaContent
 from qtpy.QtGui import QIcon, QPixmap, QTextDocument, QTextOption
 from concurrent.futures import ThreadPoolExecutor
+
+class GenreCache:
+    def __init__(self, cache_dir=".genre_cache"):
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(exist_ok=True)
+
+    def get(self, genre, page):
+        cache_file = self.cache_dir / f"{genre}_page{page}.json"
+        if cache_file.exists():
+            with cache_file.open("r") as f:
+                return json.load(f)
+        return None
+
+    def set(self, genre, page, data):
+        cache_file = self.cache_dir / f"{genre}_page{page}.json"
+        with cache_file.open("w") as f:
+            json.dump(data, f)
+
+class GenreLoader(QThread):
+    tracks_loaded = Signal(list)
+    error_occurred = Signal(str)
+
+    def __init__(self, genre, page, count):
+        super().__init__()
+        self.genre = genre
+        self.page = page
+        self.count = count
+
+    def run(self):
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                genre_api_url = f"https://api-v2.hearthis.at/categories/{self.genre}/"
+                params = {
+                    "page": self.page,
+                    "count": self.count,
+                }
+                response = requests.get(genre_api_url, params=params, timeout=20)
+                response.raise_for_status()
+                genre_tracks = response.json()
+                self.tracks_loaded.emit(genre_tracks)
+                break
+            except requests.RequestException as e:
+                if attempt < max_retries - 1:
+                    print(f"Error loading genre tracks (attempt {attempt + 1}): {e}. Retrying...")
+                    time.sleep(1)  # Wait before retrying
+                else:
+                    self.error_occurred.emit(f"Failed to load genre tracks after {max_retries} attempts: {e}")
 
 class GenreSelector(QWidget):
     genre_selected = Signal(str)
@@ -39,13 +91,12 @@ class HearThisPlayer(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("HearThis Player")
+        self.setWindowTitle("HearThisPlayer")
         self.setGeometry(100, 100, 800, 600)
 
         self.central_widget = QWidget(self)
         self.setCentralWidget(self.central_widget)
 
-        # Create a main layout for the central widget
         self.main_layout = QVBoxLayout(self.central_widget)
 
         self.search_input = QLineEdit(self)
@@ -67,9 +118,6 @@ class HearThisPlayer(QMainWindow):
         self.page_label = QLabel(self)
         self.page_label.setAlignment(Qt.AlignCenter)
 
-        self.artist_avatar_label = QLabel(self)
-        self.artist_avatar_label.setScaledContents(True)
-
         self.artist_info_label = QTextBrowser(self)
         self.artist_info_label.setOpenExternalLinks(True)
         self.artist_info_label.setOpenLinks(True)
@@ -83,11 +131,6 @@ class HearThisPlayer(QMainWindow):
         self.local_playlist = []
         self.selected_playlist = []
         self.current_track_index = 0
-
-        self.signal = Signal()
-        update_playlist_signal = Signal(list)
-        update_genres_signal = Signal(list)
-        update_artist_info_signal = Signal(dict)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_duration)
@@ -106,6 +149,10 @@ class HearThisPlayer(QMainWindow):
 
         self.load_genre_button = QPushButton("Load Genre", self)
         self.load_genre_button.clicked.connect(self.load_genre_tracks)
+
+        self.load_more_button = QPushButton("Load More", self)
+        self.load_more_button.clicked.connect(self.load_more_tracks)
+        self.load_more_button.setVisible(False)
 
         self.prev_page_button = QPushButton("<", self)
         self.prev_page_button.clicked.connect(self.load_prev_page)
@@ -131,11 +178,11 @@ class HearThisPlayer(QMainWindow):
         genre_layout.addWidget(self.load_genre_button)
         genre_layout.addWidget(self.prev_page_button)
         genre_layout.addWidget(self.next_page_button)
+        genre_layout.addWidget(self.load_more_button)
 
         info_layout = QVBoxLayout()
         info_layout.addWidget(self.artist_info_label)
 
-        # Add all layouts and widgets to the main layout
         self.main_layout.addLayout(search_layout)
         self.main_layout.addWidget(self.tab_widget)
         self.main_layout.addWidget(self.add_to_selected_button)
@@ -144,12 +191,14 @@ class HearThisPlayer(QMainWindow):
         self.main_layout.addLayout(info_layout)
         self.main_layout.addLayout(load_buttons_layout)
 
+        self.update_playlist_signal.connect(self.update_playlist)
+        self.update_genres_signal.connect(self.update_genres)
+        self.update_artist_info_signal.connect(self.update_artist_info)
 
+        self.genre_cache = GenreCache()
+        self.tracks_per_page = 20
+        self.current_page = 1
 
-        self.signal = self
-        self.signal.update_playlist_signal.connect(self.update_playlist)
-        self.signal.update_genres_signal.connect(self.update_genres)
-        self.signal.update_artist_info_signal.connect(self.update_artist_info)
         self.load_genres()
 
     def create_media_controls(self):
@@ -162,7 +211,6 @@ class HearThisPlayer(QMainWindow):
         media_controls_layout.addWidget(self.time_label)
         media_controls_layout.addWidget(self.position_slider)
 
-        # Add the media controls to the main layout
         self.main_layout.addLayout(media_controls_layout)
 
     def create_toolbar(self):
@@ -258,7 +306,7 @@ class HearThisPlayer(QMainWindow):
             avatar_url = artist_info.get("avatar_url")
             description = artist_info.get("description")
 
-            self.signal.update_artist_info_signal.emit({"avatar_url": avatar_url, "description": description})
+            self.update_artist_info_signal.emit({"avatar_url": avatar_url, "description": description})
 
         except requests.RequestException as e:
             print(f"Error loading artist info: {e}")
@@ -275,7 +323,7 @@ class HearThisPlayer(QMainWindow):
             response_artist = requests.get(artist_api_url)
             response_artist.raise_for_status()
             artist_info = response_artist.json()
-            self.signal.update_artist_info_signal.emit(artist_info)
+            self.update_artist_info_signal.emit(artist_info)
 
             response_tracks = requests.get(tracks_api_url)
             response_tracks.raise_for_status()
@@ -306,7 +354,6 @@ class HearThisPlayer(QMainWindow):
         except requests.RequestException as e:
             print(f"Error loading artist {track_type}: {e}")
 
-
     def update_genres(self, genres):
         print("Updated genres:", genres)
 
@@ -317,87 +364,85 @@ class HearThisPlayer(QMainWindow):
             print("Please select a genre.")
             return
 
-        genre_api_url = f"https://api-v2.hearthis.at/categories/{selected_genre}/"
-        params = {
-            "page": self.page,
-            "count": 20,
-        }
+        self.selected_genre = selected_genre
+        self.current_page = 1
+        self.load_page()
 
-        try:
-            response = requests.get(genre_api_url, params=params)
-            response.raise_for_status()
-            genre_tracks = response.json()
+    def load_page(self):
+        self.show_loading_indicator()
 
-            self.playlist.clear()
-            self.selected_tracks.clear()
-            self.local_playlist.clear()
-            self.selected_playlist.clear()
-            self.current_track_index = 0
+        cached_data = self.genre_cache.get(self.selected_genre, self.current_page)
+        if cached_data:
+            self.update_playlist(cached_data)
+            self.hide_loading_indicator()
+        else:
+            self.loader = GenreLoader(self.selected_genre, self.current_page, self.tracks_per_page)
+            self.loader.tracks_loaded.connect(self.update_playlist_and_cache)
+            self.loader.error_occurred.connect(self.handle_loading_error)
+            self.loader.start()
 
-            for track in genre_tracks:
-                title = track["title"]
-                track_data = {
-                    "id": track["id"],
-                    "uri": track["uri"],
-                    "stream_url": track["stream_url"],
-                    "duration": track["duration"],
-                }
-
-                item = QListWidgetItem(title)
-                item.setData(Qt.UserRole, track_data)
-                self.local_playlist.append((title, track_data))
-                self.playlist.addItem(item)
-
-        except requests.RequestException as e:
-            print(f"Error loading genre tracks: {e}")
+    def load_more_tracks(self):
+        self.current_page += 1
+        self.load_page()
 
     def load_prev_page(self):
-        if self.page > 1:
-            self.page -= 1
-            self.load_genre_tracks()
+        if self.current_page > 1:
+            self.current_page -= 1
+            self.load_page()
 
     def load_next_page(self):
-        self.page += 1
-        self.load_genre_tracks()
+        self.current_page += 1
+        self.load_page()
 
     def load_genres(self):
         hearthis_api_url = "https://api-v2.hearthis.at/categories/"
-        response = requests.get(hearthis_api_url)
-
-        if response.status_code == 200:
+        try:
+            response = requests.get(hearthis_api_url)
+            response.raise_for_status()
             genres_data = response.json()
             genres = [genre["id"] for genre in genres_data]
             self.genre_selector.set_genres(genres)
-            self.signal.update_genres_signal.emit(genres)
+            self.update_genres_signal.emit(genres)
+        except requests.RequestException as e:
+            print(f"Error loading genres: {e}")
 
     def load_pages(self):
         executor = ThreadPoolExecutor(max_workers=5)
         executor.map(self.load_page, range(1, 36))
 
-    def load_page(self, page):
-        hearthis_api_url = f"https://api-v2.hearthis.at/{self.artist_username}/?page={page}&count=5"
-        response = requests.get(hearthis_api_url)
-
-        if response.status_code == 200:
-            data = response.json()
-            tracks = data["data"]
-
-            if not tracks:
-                print(f"No more tracks found for {self.artist_username} on page {page}.")
-                return
-
-            self.signal.update_playlist_signal.emit(tracks)
-
     def update_playlist(self, tracks):
+        self.playlist.clear()
+        self.local_playlist.clear()
+
+        if not isinstance(tracks, list):
+            print(f"Error: Expected a list of tracks, but got {type(tracks)}")
+            print(f"Tracks data: {tracks}")
+            return
+
         for track in tracks:
-            title = track["title"]
+            if not isinstance(track, dict):
+                print(f"Error: Expected a dictionary for track data, but got {type(track)}")
+                print(f"Track data: {track}")
+                continue
+
+            title = track.get("title")
+            if title is None:
+                print(f"Error: Track is missing 'title' key")
+                print(f"Track data: {track}")
+                continue
+
             item = QListWidgetItem(title)
             item.setData(Qt.UserRole, track)
             self.local_playlist.append((title, track))
             self.playlist.addItem(item)
 
-        self.page_label.setText(f"Loaded page {self.page} for {self.artist_username}")
-        self.page += 1
+        self.page_label.setText(f"Loaded page {self.current_page} for {self.selected_genre}")
+        self.load_more_button.setVisible(True)
+
+    def update_playlist_and_cache(self, tracks):
+        self.update_playlist(tracks)
+        self.genre_cache.set(self.selected_genre, self.current_page, tracks)
+        self.hide_loading_indicator()
 
     def play_track(self, item):
         if not item:
@@ -479,35 +524,47 @@ class HearThisPlayer(QMainWindow):
             self.selected_tracks.addItem(item)
 
     def load_tracks_by_genre(self, selected_genre):
-        self.artist_username = selected_genre
-        self.page = 1
+        self.selected_genre = selected_genre
+        self.current_page = 1
         self.playlist.clear()
         self.selected_tracks.clear()
         self.local_playlist.clear()
         self.selected_playlist.clear()
         self.current_track_index = 0
 
-        self.load_pages()
-
-    def update_genres(self, genres):
-        print("Updated genres:", genres)
+        self.load_page()
 
     def update_artist_info(self, artist_info):
         avatar_url = artist_info.get("avatar_url")
         description = artist_info.get("description")
+
+        self.artist_info_label.clear()
 
         if avatar_url:
             avatar_pixmap = QPixmap()
             avatar_pixmap.loadFromData(requests.get(avatar_url).content)
             self.artist_info_label.document().addResource(
                 QTextDocument.ImageResource,
-                QUrl(avatar_url),
+                QUrl("avatar"),
                 avatar_pixmap
             )
-            self.artist_info_label.insertHtml(f'<img src="{avatar_url}" width="100" height="100"/>')
+            self.artist_info_label.append('<img src="avatar" width="100" height="100"/>')
 
         if description:
             self.artist_info_label.append(f"<b>Description:</b><br>{description}")
+
+    def show_loading_indicator(self):
+        self.loading_label = QLabel("Loading...", self)
+        self.main_layout.addWidget(self.loading_label)
+
+    def hide_loading_indicator(self):
+        if hasattr(self, 'loading_label'):
+            self.loading_label.deleteLater()
+            del self.loading_label
+
+    def handle_loading_error(self, error_message):
+        print(f"Error loading genre tracks: {error_message}")
+        self.hide_loading_indicator()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
